@@ -1,0 +1,60 @@
+services:
+  database:
+    image: mariadb:latest
+    container_name: master-database-mysql-1
+    healthcheck:
+      test: ["CMD", "mariadb-check", "--all-databases", "-unextcloud", "-pnextcloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    environment:
+      - MYSQL_ROOT_PASSWORD=nextcloud
+      - MYSQL_PASSWORD=nextcloud
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+    volumes:
+      - ./db/mysql:/var/lib/mysql:Z
+
+  minio:
+    image: minio/minio
+    container_name: master-minio-1
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+      - MINIO_REGION_NAME=eu-central-1
+    ports:
+      - "9000:9000"  # S3 API port
+      - "9001:9001"  # MinIO Web Console port
+    volumes:
+      # Added a matching local bind mount for MinIO data
+      - ./minio/data:/data:Z
+
+  nextcloud:
+    image: nextcloud:latest
+    container_name: master-nextcloud-1
+    ports:
+      - "8080:80"
+    environment:
+      - MYSQL_HOST=database
+      - MYSQL_PASSWORD=nextcloud
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+      
+      - NEXTCLOUD_ADMIN_USER=admin
+      - NEXTCLOUD_ADMIN_PASSWORD=nextcloud
+      - OBJECTSTORE_S3_HOST=minio
+      - OBJECTSTORE_S3_PORT=9000
+      - OBJECTSTORE_S3_BUCKET=nextcloud-bucket
+      - OBJECTSTORE_S3_KEY=minioadmin
+      - OBJECTSTORE_S3_SECRET=minioadmin
+      - OBJECTSTORE_S3_SSL=false
+      - OBJECTSTORE_S3_USEPATH_STYLE=true
+      - OBJECTSTORE_S3_AUTOCREATE=true
+      - OBJECTSTORE_S3_REGION=us-east-1
+
+    volumes:
+      - ./app/html:/var/www/html:z
+    depends_on:
+      - database
+      - minio

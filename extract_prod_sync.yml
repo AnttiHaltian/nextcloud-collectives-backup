@@ -1,0 +1,51 @@
+---
+- name: Extract Nextcloud data
+  hosts: remote_docker
+  gather_facts: true
+  vars:
+    nc_container: "master-nextcloud-1"
+    db_container: "master-database-mysql-1"
+    db_user: "nextcloud"
+    db_password: "nextcloud"
+    db_name: "nextcloud"
+    backup_root: "{{ playbook_dir }}/backups"
+    timestamp: "{{ ansible_date_time.date }}_{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}"
+    backup_path: "{{ backup_root }}/{{ timestamp }}"
+
+  tasks:
+    - name: Create local backup dirs
+      delegate_to: localhost
+      file:
+        path: "{{ backup_path }}/db"
+        state: directory
+
+    - name: Maintenance on prod
+      shell: "docker exec -u 33 {{ nc_container }} php occ maintenance:mode --on"
+
+    - name: Dump database
+      shell: "docker exec {{ db_container }} mariadb-dump -u {{ db_user }} -p{{ db_password }} {{ db_name }}"
+      register: remote_db_dump
+
+    - name: Save SQL dump
+      delegate_to: localhost
+      copy:
+        content: "{{ remote_db_dump.stdout }}"
+        dest: "{{ backup_path }}/db/dump.sql"
+
+    - name: Copy config.php to remote temp dir
+      shell: "docker cp {{ nc_container }}:/var/www/html/config/config.php /tmp/config.php"
+
+    - name: Fetch config.php
+      fetch:
+        src: /tmp/config.php
+        dest: "{{ backup_path }}/config.php"
+        flat: yes
+
+    - name: Clean up remote temp file
+      file:
+        path: /tmp/config.php
+        state: absent
+
+    - name: Backup complete
+      debug:
+        msg: "Backup path: {{ backup_path }}"

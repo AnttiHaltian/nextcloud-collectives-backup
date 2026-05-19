@@ -1,0 +1,7 @@
+/backups/*
+/testing/*
+/prod/*
+
+!/testing/docker-compose.yml
+!/testing/docker-compose-target.yml
+!/prod/docker-compose.yml
