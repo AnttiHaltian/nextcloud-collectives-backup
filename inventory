@@ -1,0 +1,6 @@
+[remote_docker]
+localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3.14 minio_user=minioadmin minio_pass=minioadmin minio_port=9000 s3_region=us-east-1
+[remote_centos_1]
+192.168.10.211 ansible_user=ansible
+[eu_remote_docker]
+localhost ansible_connection=local ansible_python_interpreter=/usr/bin/python3.14 minio_user=targetadmin minio_pass=targetpassword minio_port=9002 s3_region=eu-central-1

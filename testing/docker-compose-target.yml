@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  database:
+    image: mariadb:latest
+    container_name: eu-database-mysql-1
+    healthcheck:
+      test: ["CMD", "mariadb-check", "--all-databases", "-unextcloud", "-pnextcloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    environment:
+      - MYSQL_ROOT_PASSWORD=nextcloud
+      - MYSQL_PASSWORD=nextcloud
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+
+  minio-target:
+    image: minio/minio
+    container_name: eu-minio-target
+    environment:
+      MINIO_ROOT_USER: targetadmin
+      MINIO_ROOT_PASSWORD: targetpassword
+      MINIO_REGION_NAME: eu-central-1
+    command: server /data --console-address ":9091"
+    ports:
+      - "9002:9000" # Shifted to 9002 (Source uses 9000, 9001)
+      - "9092:9091" # Shifted to 9092
+
+  nextcloud:
+    image: nextcloud:latest
+    container_name: eu-nextcloud-1
+    ports:
+      - "8081:80"   # Shifted to 8081 (Source uses 8080)
+    environment:
+      - MYSQL_HOST=database
+      - MYSQL_PASSWORD=nextcloud
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+      
+      - OBJECTSTORE_S3_HOST=minio-target
+      - OBJECTSTORE_S3_PORT=9000
+      - OBJECTSTORE_S3_BUCKET=nextcloud-bucket
+      - OBJECTSTORE_S3_KEY=targetadmin
+      - OBJECTSTORE_S3_SECRET=targetpassword
+      - OBJECTSTORE_S3_SSL=false
+      - OBJECTSTORE_S3_USEPATH_STYLE=true
+      - OBJECTSTORE_S3_AUTOCREATE=true
+      - OBJECTSTORE_S3_REGION=eu-central-1
+
+    depends_on:
+      - database
+      - minio-target

@@ -1,0 +1,107 @@
+---
+- name: Restore Nextcloud to local
+  hosts: localhost
+  gather_facts: false
+  vars:
+    nc_container: "eu-nextcloud-1"
+    db_container: "eu-database-mysql-1"
+    minio_target_container: "eu-minio-target"
+    
+    db_user: "nextcloud"
+    db_password: "nextcloud"
+    db_name: "nextcloud"
+    backup_path: "{{ required_backup_path }}"
+
+  tasks:
+    - name: Verify target containers
+      shell: "docker ps --format '{{ '{{' }}.Names{{ '}}' }}' | grep -w {{ item }}"
+      loop:
+        - "{{ nc_container }}"
+        - "{{ db_container }}"
+        - "{{ minio_target_container }}"
+      register: container_check
+      failed_when: container_check.rc != 0
+      changed_when: false
+
+    - name: Wait for minio
+      pause:
+        seconds: 5
+
+    - name: Sync S3 bucket from remote
+      command: >
+        rclone sync remote_src:nextcloud-bucket :s3:nextcloud-bucket
+        --s3-provider Minio 
+        --s3-endpoint http://localhost:9002
+        --s3-region eu-central-1
+        --s3-access-key-id targetadmin 
+        --s3-secret-access-key targetpassword
+        --s3-env-auth=false
+        -P
+      environment:
+        RCLONE_CONFIG_REMOTE_SRC_TYPE: s3
+        RCLONE_CONFIG_REMOTE_SRC_PROVIDER: Minio
+        RCLONE_CONFIG_REMOTE_SRC_ENDPOINT: "http://{{ ansible_host | default('localhost') }}:{{ minio_port | default('9000') }}"
+        RCLONE_CONFIG_REMOTE_SRC_REGION: "us-east-1"
+        RCLONE_CONFIG_REMOTE_SRC_ACCESS_KEY_ID: "{{ minio_user | default('minioadmin') }}"
+        RCLONE_CONFIG_REMOTE_SRC_SECRET_ACCESS_KEY: "{{ minio_pass | default('minioadmin') }}"
+
+    - name: Wait for mariaDB
+      shell: "docker exec {{ db_container }} mariadb -u {{ db_user }} -p{{ db_password }} -e 'SELECT 1;'"
+      register: db_ready
+      until: db_ready.rc == 0
+      retries: 20
+      delay: 5
+
+    - name: Import SQL Data
+      shell: "docker exec -i {{ db_container }} mariadb -u {{ db_user }} -p{{ db_password }} {{ db_name }} < {{ backup_path }}/db/dump.sql"
+
+    - name: Restore config.php and fix Permissions
+      shell: |
+        docker cp {{ backup_path }}/config.php {{ nc_container }}:/var/www/html/config/config.php
+        docker exec -u root {{ nc_container }} chown -R 33:33 /var/www/html/config
+
+    - name: Create .ncdata marker
+      shell: |
+        docker exec -u root {{ nc_container }} mkdir -p /var/www/html/data
+        docker exec -u root {{ nc_container }} sh -c 'echo "# Nextcloud data directory" > /var/www/html/data/.ncdata'
+        docker exec -u root {{ nc_container }} chown -R 33:33 /var/www/html/data
+
+    - name: Configure nextcloud
+      shell: |
+        docker exec -u 33 {{ nc_container }} php occ config:system:set objectstore arguments hostname --value="{{ minio_target_container }}"
+        docker exec -u 33 {{ nc_container }} php occ config:system:set objectstore arguments port --value=9000
+        docker exec -u 33 {{ nc_container }} php occ config:system:set objectstore arguments key --value="targetadmin"
+        docker exec -u 33 {{ nc_container }} php occ config:system:set objectstore arguments secret --value="targetpassword"
+        docker exec -u 33 {{ nc_container }} php occ config:system:set objectstore arguments region --value="eu-central-1"
+        docker exec -u 33 {{ nc_container }} php occ config:system:set dbhost --value="database"
+
+    - name: Remove cache settings
+      shell: |
+        docker exec -u 33 {{ nc_container }} php occ config:system:delete memcache.locking || true
+        docker exec -u 33 {{ nc_container }} php occ config:system:delete memcache.distributed || true
+      ignore_errors: true
+
+    - name: Restart nextcloud container
+      shell: "docker restart {{ nc_container }}"
+
+    - name: Wait for Nextcloud container to boot
+      pause:
+        seconds: 10
+
+    - name: Refresh appdata
+      shell: |
+        docker exec -u 33 {{ nc_container }} php occ maintenance:mode --off
+        docker exec -u 33 {{ nc_container }} php occ maintenance:theme:update
+        docker exec -u 33 {{ nc_container }} php occ maintenance:data-fingerprint
+        docker exec -u 33 {{ nc_container }} php occ files:scan --all
+        docker exec -u 33 {{ nc_container }} php occ files:scan-app-data
+      ignore_errors: yes
+
+    - name: Install Collectives
+      shell: |
+        docker exec -u 33 {{ nc_container }} php occ app:install collectives || true
+        docker exec -u 33 {{ nc_container }} php occ app:enable collectives
+      ignore_errors: true
+
+    - name: Restart nextcloud container
+      shell: "docker restart {{ nc_container }}"
